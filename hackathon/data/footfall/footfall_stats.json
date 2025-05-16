@@ -1,0 +1,18 @@
+{
+  "total_entries": 9,
+  "total_exits": 30,
+  "current_visitors": 0,
+  "hourly_entries": {
+    "2025-05-16 16:00": 9
+  },
+  "hourly_exits": {
+    "2025-05-16 16:00": 30
+  },
+  "daily_entries": {
+    "2025-05-16": 9
+  },
+  "daily_exits": {
+    "2025-05-16": 30
+  },
+  "last_updated": 1747394760.790833
+}
