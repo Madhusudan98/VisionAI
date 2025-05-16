@@ -1,17 +1,25 @@
 # Core dependencies
 numpy>=1.20.0
 opencv-python>=4.5.0
-ultralytics>=8.0.0  # For YOLOv8
-pillow>=8.0.0
+torch>=1.10.0
+torchvision>=0.11.0
 
-# For API (if needed)
-fastapi>=0.70.0
-uvicorn>=0.15.0
-pydantic>=1.8.0
+# YOLOv8 dependencies
+ultralytics>=8.0.0
 
-# For tracking
-scipy>=1.7.0
+# Tracking dependencies
+easydict>=1.9
+PyYAML>=6.0
 
-# Optional but recommended
-matplotlib>=3.4.0  # For visualization
-python-dotenv>=0.19.0  # For environment variables 
+# Deep learning dependencies
+tqdm>=4.64.0
+Pillow>=9.0.0
+
+# Optional dependencies that might be needed
+matplotlib>=3.5.0
+scikit-image>=0.19.0
+tensorboard>=2.10.0
+wandb>=0.13.0
+
+# System dependencies
+pathlib>=1.0.1 
