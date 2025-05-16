@@ -4,11 +4,13 @@ import sys
 import os
 import time
 import argparse
+from datetime import datetime, timedelta
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.utils.object_detector import ObjectDetector
+from backend.app.database import FootfallDatabase
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -18,6 +20,9 @@ def parse_args():
     parser.add_argument('--show', action='store_true', help='Show results')
     parser.add_argument('--save', action='store_true', help='Save results')
     parser.add_argument('--output-dir', type=str, default='outputs', help='Output directory')
+    parser.add_argument('--db-path', type=str, default='footfall_data.db', help='Path to database file')
+    parser.add_argument('--device-id', type=str, default=None, help='Device ID for camera identification')
+    parser.add_argument('--log-interval', type=int, default=30, help='Interval in seconds to log summary data')
     return parser.parse_args()
 
 def draw_stats(frame, potential, window_shoppers, staff, entries, exits):
@@ -91,6 +96,9 @@ def main():
     # Create output directory if saving results
     if args.save:
         os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Initialize database
+    db = FootfallDatabase(args.db_path)
     
     # Initialize detector
     detector = ObjectDetector(
@@ -193,6 +201,13 @@ def main():
     # First frame flag
     first_frame = True
     
+    # Start a new session in the database
+    session_id = db.start_session(source=args.source, device_id=args.device_id)
+    
+    # Initialize timestamp for periodic logging
+    last_log_time = time.time()
+    current_timestamp = datetime.now()
+    
     # Process frames
     frame_count = 0
     start_time = time.time()
@@ -204,6 +219,7 @@ def main():
         
         frame_count += 1
         current_time = time.time()
+        current_timestamp = datetime.now()
         
         # Get detections
         detections = detector.detect(frame)
@@ -340,10 +356,34 @@ def main():
                 if not person["counted"] and person["total_frames"] >= 10 and person["type"] != "staff":
                     person["counted"] = True
                     total_entries += 1
+                    
+                    # Log the entry event to the database
+                    db.insert_event(
+                        timestamp=current_timestamp,
+                        event_type="entry",
+                        person_type=person["type"],
+                        tracking_id=tracking_id,
+                        details={
+                            "position": position,
+                            "frame": frame_count
+                        }
+                    )
+                    
                     if person["type"] == "potential":
                         potential_customers += 1
                     else:
                         window_shoppers += 1
+                
+                # Store detection in database (only every 10th frame to avoid too much data)
+                if frame_count % 10 == 0:
+                    db.insert_detection(
+                        timestamp=current_timestamp,
+                        frame_number=frame_count,
+                        tracking_id=tracking_id,
+                        person_type=person["type"],
+                        position=position,
+                        bbox=[x1, y1, x2, y2]
+                    )
         
         # Handle exits - people who were tracked but are no longer visible
         for track_id in list(tracked_people.keys()):
@@ -354,6 +394,20 @@ def main():
                 # If gone for 10+ frames and was counted as an entry, count as exit
                 if frames_gone >= 10 and person["counted"] and person["type"] != "staff":
                     total_exits += 1
+                    
+                    # Log the exit event to the database
+                    db.insert_event(
+                        timestamp=current_timestamp,
+                        event_type="exit",
+                        person_type=person["type"],
+                        tracking_id=track_id,
+                        details={
+                            "frames_visible": person["total_frames"],
+                            "first_seen": person["first_seen"],
+                            "last_seen": person["last_seen"]
+                        }
+                    )
+                    
                     if person["type"] == "potential":
                         potential_customers = max(0, potential_customers - 1)
                     else:
@@ -396,6 +450,20 @@ def main():
         cv2.putText(frame, f"FPS: {avg_fps:.1f}", (10, height - 10), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
+        # Periodically log summary data to database
+        if current_time - last_log_time >= args.log_interval:
+            # Log current stats to database
+            db.insert_footfall_summary(
+                timestamp=current_timestamp,
+                potential_customers=potential_customers,
+                window_shoppers=window_shoppers,
+                staff=staff_count,
+                total_entries=total_entries,
+                total_exits=total_exits
+            )
+            last_log_time = current_time
+            print(f"Logged data at {current_timestamp}: Potential={potential_customers}, Window={window_shoppers}, Staff={staff_count}")
+        
         # Show results
         if args.show:
             cv2.imshow("Customer Analytics", frame)
@@ -406,17 +474,39 @@ def main():
         if args.save and out:
             out.write(frame)
     
+    # Update session data in the database
+    elapsed = time.time() - start_time
+    avg_fps = frame_count / elapsed if elapsed > 0 else 0
+    db.end_session(
+        session_id=session_id,
+        total_frames=frame_count,
+        avg_fps=avg_fps,
+        total_entries=total_entries,
+        total_exits=total_exits
+    )
+    
+    # Final logging of stats
+    db.insert_footfall_summary(
+        timestamp=datetime.now(),
+        potential_customers=potential_customers,
+        window_shoppers=window_shoppers,
+        staff=staff_count,
+        total_entries=total_entries,
+        total_exits=total_exits
+    )
+    
     # Release resources
     cap.release()
     if out:
         out.release()
     cv2.destroyAllWindows()
+    db.close()
     
     # Print summary
-    elapsed = time.time() - start_time
     print(f"Processed {frame_count} frames in {elapsed:.2f} seconds ({frame_count/elapsed:.2f} FPS)")
     print(f"Final stats: Entries={total_entries}, Exits={total_exits}")
     print(f"Customer types: Potential={potential_customers}, Window Shoppers={window_shoppers}, Staff={staff_count}")
+    print(f"Data saved to database: {args.db_path}")
 
 if __name__ == "__main__":
     main() 

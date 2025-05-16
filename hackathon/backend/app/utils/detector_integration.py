@@ -17,6 +17,7 @@ from .visitor_counter import VisitorCounter
 from .zone_detector import ZoneDetector
 from .dwell_time_analyzer import DwellTimeAnalyzer
 from .movement_anomaly_detector import MovementAnomalyDetector
+from .unauthorized_area_detector import UnauthorizedAreaDetector
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,7 @@ class DetectorIntegration:
         self,
         store_id: str = "default_store",
         data_dir: str = "data",
+        labels_file: Optional[str] = None,
         callback: Optional[Callable] = None
     ):
         """
@@ -39,6 +41,7 @@ class DetectorIntegration:
         Args:
             store_id: Unique identifier for this store/location
             data_dir: Base directory for data storage
+            labels_file: Path to CSV file containing label data for unauthorized areas
             callback: Optional callback function for all alerts
         """
         self.store_id = store_id
@@ -49,6 +52,7 @@ class DetectorIntegration:
         os.makedirs(os.path.join(data_dir, "footfall"), exist_ok=True)
         os.makedirs(os.path.join(data_dir, "dwell"), exist_ok=True)
         os.makedirs(os.path.join(data_dir, "anomalies"), exist_ok=True)
+        os.makedirs(os.path.join(data_dir, "unauthorized"), exist_ok=True)
         
         # Define entry/exit lines
         self.entry_line = LineCrossingDetector(
@@ -116,6 +120,13 @@ class DetectorIntegration:
             callback=self._on_anomaly_alert
         )
         
+        # Define unauthorized area detector
+        self.unauthorized_detector = UnauthorizedAreaDetector(
+            labels_file=labels_file,
+            data_dir=os.path.join(data_dir, "unauthorized"),
+            callback=self._on_unauthorized_access
+        )
+        
         logger.info(f"Detector integration initialized for store {store_id}")
     
     def update(self, object_id: int, position: Tuple[float, float], timestamp: float = None) -> List[Dict]:
@@ -159,6 +170,11 @@ class DetectorIntegration:
         if anomaly_alert:
             alerts.append(anomaly_alert)
         
+        # Check unauthorized areas
+        unauthorized_alert = self.unauthorized_detector.update(object_id, position, timestamp)
+        if unauthorized_alert:
+            alerts.append(unauthorized_alert)
+        
         return alerts
     
     def get_current_stats(self) -> Dict[str, Any]:
@@ -175,6 +191,10 @@ class DetectorIntegration:
             "zone_occupancy": {
                 zone_id: len(self.zone_detector.get_objects_in_zone(zone_id))
                 for zone_id in self.zones
+            },
+            "unauthorized_areas": {
+                "total_events": len(self.unauthorized_detector.access_events),
+                "objects_in_areas": self.unauthorized_detector.get_objects_in_unauthorized_areas()
             },
             "recent_alerts": self._get_recent_alerts()
         }
@@ -200,6 +220,9 @@ class DetectorIntegration:
         
         # Draw dwell time areas
         frame = self.dwell_analyzer.draw_areas(frame)
+        
+        # Draw unauthorized areas
+        frame = self.unauthorized_detector.draw_areas(frame, color=(255, 0, 0), alpha=0.4)
         
         # Add visitor stats overlay
         import cv2  # Import here to avoid requiring cv2 for basic functionality
@@ -268,6 +291,14 @@ class DetectorIntegration:
         if self.callback:
             self.callback(alert)
     
+    def _on_unauthorized_access(self, alert: Dict[str, Any]):
+        """Handle unauthorized area access alerts."""
+        logger.warning(f"UNAUTHORIZED ACCESS ALERT: {alert['message']}")
+        
+        # Forward to main callback if provided
+        if self.callback:
+            self.callback(alert)
+    
     def _get_recent_alerts(self, count: int = 5) -> Dict[str, List[Dict[str, Any]]]:
         """Get recent alerts from all detectors."""
         return {
@@ -275,5 +306,6 @@ class DetectorIntegration:
             "anomaly_alerts": self.anomaly_detector.get_recent_alerts(count),
             "zone_events": self.zone_detector.get_recent_events(count),
             "entry_events": self.entry_line.get_recent_crossings(count),
-            "exit_events": self.exit_line.get_recent_crossings(count)
+            "exit_events": self.exit_line.get_recent_crossings(count),
+            "unauthorized_events": self.unauthorized_detector.get_recent_events(count)
         } 
