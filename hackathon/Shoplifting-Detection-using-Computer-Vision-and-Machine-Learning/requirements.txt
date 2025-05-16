@@ -1,0 +1,7 @@
+ultralytics
+numpy
+imutils
+opencv-python
+torch
+roboflow
+pyresearch

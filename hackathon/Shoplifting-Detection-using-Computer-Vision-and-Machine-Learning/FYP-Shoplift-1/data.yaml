@@ -1,0 +1,13 @@
+train: /Users/vyaparapp/Downloads/hackathon/Shoplifting-Detection-using-Computer-Vision-and-Machine-Learning/FYP-Shoplift-1/train/images
+val: /Users/vyaparapp/Downloads/hackathon/Shoplifting-Detection-using-Computer-Vision-and-Machine-Learning/FYP-Shoplift-1/valid/images
+test: /Users/vyaparapp/Downloads/hackathon/Shoplifting-Detection-using-Computer-Vision-and-Machine-Learning/FYP-Shoplift-1/test/images
+
+nc: 2
+names: ['normal', 'shoplifting']
+
+# roboflow:
+#   workspace: fastnuces-uakqb
+#   project: fyp-shoplift
+#   version: 1
+#   license: CC BY 4.0
+#   url: https://universe.roboflow.com/fastnuces-uakqb/fyp-shoplift/dataset/1
