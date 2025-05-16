@@ -1,0 +1,17 @@
+# Core dependencies
+numpy>=1.20.0
+opencv-python>=4.5.0
+ultralytics>=8.0.0  # For YOLOv8
+pillow>=8.0.0
+
+# For API (if needed)
+fastapi>=0.70.0
+uvicorn>=0.15.0
+pydantic>=1.8.0
+
+# For tracking
+scipy>=1.7.0
+
+# Optional but recommended
+matplotlib>=3.4.0  # For visualization
+python-dotenv>=0.19.0  # For environment variables 
