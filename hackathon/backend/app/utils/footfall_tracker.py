@@ -91,7 +91,8 @@ class FootfallTracker:
                 "first_seen": timestamp,
                 "last_seen": timestamp,
                 "positions": [(position, timestamp)],
-                "zone_transitions": []
+                "zone_transitions": [],
+                "simple_transitions": []  # Added for simpler format
             }
             
             # Initialize zone presence
@@ -133,6 +134,9 @@ class FootfallTracker:
                         "type": transition_type,
                         "timestamp": timestamp
                     })
+                    
+                    # Also store in simple format for compatibility
+                    person_data["simple_transitions"].append((transition_type, timestamp))
                     
                     # Update zone presence
                     self.zone_presence[person_id][zone_id] = in_zone
@@ -324,8 +328,19 @@ class FootfallTracker:
         
         for person_id in to_remove:
             del self.tracked_people[person_id]
-            if person_id in self.zone_presence:
-                del self.zone_presence[person_id]
+            del self.zone_presence[person_id]
+    
+    def get_person_data(self, person_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get tracking data for a specific person.
+        
+        Args:
+            person_id: The ID of the person to retrieve data for
+            
+        Returns:
+            Dictionary with person tracking data or None if person not found
+        """
+        return self.tracked_people.get(person_id)
     
     def draw_zones(self, frame: np.ndarray) -> np.ndarray:
         """
