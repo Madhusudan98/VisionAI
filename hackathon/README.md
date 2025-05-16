@@ -14,12 +14,15 @@ hackathon/
 │           ├── zone_detector.py            # Monitors objects in defined zones
 │           ├── dwell_time_analyzer.py      # Analyzes how long objects stay in areas
 │           ├── movement_anomaly_detector.py # Detects unusual movement patterns
+│           ├── unauthorized_area_detector.py # Detects access to unauthorized areas
 │           ├── detector_integration.py     # Integrates all detector modules
 │           └── README.md                   # Detailed documentation for each module
 ├── data/
-│   └── sample_video.mp4                    # Sample video for testing
+│   ├── sample_video.mp4                    # Sample video for testing
+│   └── labels.csv                          # Label data for unauthorized areas
 └── tools/
     ├── test_specialized_detectors.py       # Script to test the detector modules
+    ├── test_unauthorized_area_detector.py  # Script to test unauthorized area detection
     └── generate_sample_video.py            # Script to generate sample test videos
 ```
 
@@ -50,6 +53,9 @@ hackathon/
 
    # Test the integrated system
    python hackathon/tools/test_specialized_detectors.py --mode integration --source hackathon/data/sample_video.mp4 --show
+   
+   # Test unauthorized area detection
+   python hackathon/tools/test_unauthorized_area_detector.py --source hackathon/data/sample_video.mp4 --show
    ```
 
 ## Available Modules
@@ -74,7 +80,12 @@ hackathon/
    - Identifies unusual movement patterns
    - Detects erratic behavior and suspicious trajectories
 
-6. **Detector Integration**
+6. **Unauthorized Area Detector**
+   - Detects when objects enter areas marked as unauthorized
+   - Uses label data to define restricted areas
+   - Generates alerts for unauthorized access
+
+7. **Detector Integration**
    - Combines all specialized detectors into a complete system
    - Provides centralized alert handling and visualization
 
@@ -88,7 +99,10 @@ Each module can be used independently or together. For detailed usage examples, 
 from backend.app.utils.detector_integration import DetectorIntegration
 
 # Create integrated detector
-detector = DetectorIntegration(store_id="my_store")
+detector = DetectorIntegration(
+    store_id="my_store",
+    labels_file="data/labels.csv"  # For unauthorized area detection
+)
 
 # Process object positions (e.g., from a tracking system)
 for object_id, position in tracked_objects.items():
@@ -101,6 +115,33 @@ for object_id, position in tracked_objects.items():
 
 # Get current statistics
 stats = detector.get_current_stats()
+```
+
+## Unauthorized Area Detection
+
+The system can detect when people enter areas marked as unauthorized using label data from a CSV file:
+
+```csv
+label_name,bbox_x,bbox_y,bbox_width,bbox_height,image_name,image_width,image_height
+UnAuthorized_Area,248,424,468,499,Screenshot.png,1841,969
+```
+
+To use this feature:
+
+1. Create a CSV file with labeled unauthorized areas
+2. Pass the file path to the detector initialization
+3. The system will generate alerts when objects enter these areas
+
+```python
+from backend.app.utils.unauthorized_area_detector import UnauthorizedAreaDetector
+
+# Create detector with label data
+detector = UnauthorizedAreaDetector(labels_file="data/labels.csv")
+
+# Update with object positions
+event = detector.update(object_id=1, position=(0.3, 0.5))
+if event:
+    print(f"Unauthorized access: {event['message']}")
 ```
 
 ## Interactive Testing

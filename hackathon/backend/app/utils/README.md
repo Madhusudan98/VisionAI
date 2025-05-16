@@ -156,7 +156,39 @@ if alert:
     print(f"Movement anomaly alert: {alert}")
 ```
 
-### 6. Detector Integration (`detector_integration.py`)
+### 6. Unauthorized Area Detector (`unauthorized_area_detector.py`)
+
+Detects when objects enter areas marked as unauthorized. Useful for:
+- Security monitoring
+- Restricted area enforcement
+- Theft prevention
+
+```python
+# Example usage
+from unauthorized_area_detector import UnauthorizedAreaDetector
+
+# Create detector with label data from CSV
+detector = UnauthorizedAreaDetector(labels_file="data/labels.csv")
+
+# Or define areas directly
+import numpy as np
+areas = {
+    "restricted_zone": np.array([
+        [0.1, 0.1], [0.3, 0.1], [0.3, 0.3], [0.1, 0.3]
+    ])
+}
+detector = UnauthorizedAreaDetector(areas=areas)
+
+# Update with object positions
+event = detector.update(object_id=1, position=(0.2, 0.2))
+if event:
+    print(f"Unauthorized access: {event['message']}")
+
+# Check if object is in any unauthorized area
+is_unauthorized = detector.is_object_in_unauthorized_area(object_id=1)
+```
+
+### 7. Detector Integration (`detector_integration.py`)
 
 Integrates all specialized detectors into a complete system. Useful for:
 - Building a full-featured detection system
@@ -170,7 +202,8 @@ from detector_integration import DetectorIntegration
 # Create an integrated detector system
 integration = DetectorIntegration(
     store_id="store_123",
-    data_dir="data"
+    data_dir="data",
+    labels_file="data/labels.csv"  # For unauthorized area detection
 )
 
 # Update with object positions
@@ -196,6 +229,9 @@ python hackathon/tools/test_specialized_detectors.py --mode zone --source hackat
 
 # Test the integrated system with the sample video
 python hackathon/tools/test_specialized_detectors.py --mode integration --source hackathon/data/sample_video.mp4 --show
+
+# Test unauthorized area detection
+python hackathon/tools/test_unauthorized_area_detector.py --source hackathon/data/sample_video.mp4 --show
 ```
 
 ### Generating a Sample Video

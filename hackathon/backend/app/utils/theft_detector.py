@@ -22,7 +22,11 @@ class TheftDetector:
         quick_grab_threshold: float = 1.5,
         suspicious_movement_threshold: float = 0.7,
         data_dir: str = "data/theft",
-        camera_id: Optional[int] = None
+        camera_id: Optional[int] = None,
+        entry_zone: Optional[np.ndarray] = None,
+        exit_zone: Optional[np.ndarray] = None,
+        customer_zone: Optional[np.ndarray] = None,
+        cashier_zone: Optional[np.ndarray] = None
     ):
         """
         Initialize the TheftDetector.
@@ -34,6 +38,10 @@ class TheftDetector:
             suspicious_movement_threshold: Threshold for movement pattern to be considered suspicious
             data_dir: Directory to save theft detection data
             camera_id: Optional camera ID
+            entry_zone: Optional array of polygon coordinates defining the entry zone (normalized 0-1)
+            exit_zone: Optional array of polygon coordinates defining the exit zone (normalized 0-1)
+            customer_zone: Optional array of polygon coordinates defining the customer zone (normalized 0-1)
+            cashier_zone: Optional array of polygon coordinates defining the cashier zone (normalized 0-1)
         """
         self.cash_counter_roi = cash_counter_roi
         self.dwell_time_threshold = dwell_time_threshold
@@ -41,24 +49,29 @@ class TheftDetector:
         self.suspicious_movement_threshold = suspicious_movement_threshold
         self.data_dir = data_dir
         self.camera_id = camera_id
+        self.entry_zone = entry_zone
+        self.exit_zone = exit_zone
         
         # Track objects around cash counter
         self.tracked_objects = {}  # {object_id: data}
         
         # Track potential theft incidents
         self.theft_incidents = []
+        self.confirmed_thefts = []
         self.last_alert_time = 0  # To prevent alert flooding
         self.alert_cooldown = 10.0  # Seconds between alerts
+        self.suspicious_persons = {}  # {person_id: {"reason": ..., "object": ..., "timestamp": ...}}
         
         # Store positional history for movement pattern analysis
         self.position_history = defaultdict(lambda: deque(maxlen=50))
         
         # Activity zones around counter
-        self.customer_zone = None  # Will be derived from cash_counter_roi
-        self.cashier_zone = None   # Will be derived from cash_counter_roi
+        self.customer_zone = customer_zone  # User-defined or derived from cash_counter_roi
+        self.cashier_zone = cashier_zone    # User-defined or derived from cash_counter_roi
         
-        # Define customer and cashier zones based on counter ROI
-        self._define_zones()
+        # Define customer and cashier zones based on counter ROI if not provided
+        if self.customer_zone is None or self.cashier_zone is None:
+            self._define_zones()
         
         logger.info("TheftDetector initialized for cash counter area")
     
@@ -142,32 +155,53 @@ class TheftDetector:
                     # Check for quick grab (unusually short time at counter)
                     if (person_data["counter_entry_time"] is not None and 
                             timestamp - person_data["counter_entry_time"] < self.quick_grab_threshold):
-                        return self._generate_theft_alert(
+                        alert = self._generate_theft_alert(
                             person_id, "quick_grab", 
                             f"Person {person_id} spent only {timestamp - person_data['counter_entry_time']:.2f}s at counter",
                             timestamp
                         )
+                        if alert:
+                            self.suspicious_persons[person_id] = {
+                                "reason": "quick_grab",
+                                "object": None,
+                                "timestamp": timestamp
+                            }
+                        return alert
             
             # Track when customer enters cashier zone (suspicious)
             if in_cashier_zone and not person_data["in_cashier_zone"] and not person_data["alert_generated"]:
                 person_data["zone_transitions"].append(("enter_cashier_zone", timestamp))
                 person_data["alert_generated"] = True
-                return self._generate_theft_alert(
+                alert = self._generate_theft_alert(
                     person_id, "unauthorized_zone", 
                     f"Person {person_id} entered cashier zone",
                     timestamp
                 )
+                if alert:
+                    self.suspicious_persons[person_id] = {
+                        "reason": "unauthorized_zone",
+                        "object": None,
+                        "timestamp": timestamp
+                    }
+                return alert
             
             # Track when person stays too long at counter
             if (in_counter_area and person_data["counter_entry_time"] is not None and
                     timestamp - person_data["counter_entry_time"] > self.dwell_time_threshold and
                     not person_data["alert_generated"]):
                 person_data["alert_generated"] = True
-                return self._generate_theft_alert(
+                alert = self._generate_theft_alert(
                     person_id, "unusual_dwell_time", 
                     f"Person {person_id} has been at counter for {timestamp - person_data['counter_entry_time']:.2f}s",
                     timestamp
                 )
+                if alert:
+                    self.suspicious_persons[person_id] = {
+                        "reason": "unusual_dwell_time",
+                        "object": None,
+                        "timestamp": timestamp
+                    }
+                return alert
             
             # Update state flags
             person_data["in_counter_area"] = in_counter_area
@@ -183,11 +217,18 @@ class TheftDetector:
             if (suspicion_score > self.suspicious_movement_threshold and 
                     not self.tracked_objects[person_id]["alert_generated"]):
                 self.tracked_objects[person_id]["alert_generated"] = True
-                return self._generate_theft_alert(
+                alert = self._generate_theft_alert(
                     person_id, "suspicious_movement", 
                     f"Person {person_id} shows suspicious movement pattern (score: {suspicion_score:.2f})",
                     timestamp
                 )
+                if alert:
+                    self.suspicious_persons[person_id] = {
+                        "reason": "suspicious_movement",
+                        "object": None,
+                        "timestamp": timestamp
+                    }
+                return alert
         
         return None  # No suspicious activity detected
     
@@ -243,11 +284,18 @@ class TheftDetector:
                 if closest_person:
                     object_data["last_associated_person"] = closest_person
                     object_data["alert_generated"] = True
-                    return self._generate_theft_alert(
+                    alert = self._generate_theft_alert(
                         closest_person, "object_taken", 
                         f"{object_class.capitalize()} {object_id} taken from counter by person {closest_person}",
                         timestamp
                     )
+                    if alert:
+                        self.suspicious_persons[closest_person] = {
+                            "reason": "object_taken",
+                            "object": obj_key,
+                            "timestamp": timestamp
+                        }
+                    return alert
             
             # Update state
             object_data["in_counter_area"] = now_on_counter
@@ -487,7 +535,7 @@ class TheftDetector:
         counter_pts = np.array([
             [int(x * w), int(y * h)] for x, y in self.cash_counter_roi
         ], np.int32)
-        cv2.polylines(frame, [counter_pts], True, (0, 255, 255), 2)
+        cv2.polylines(frame, [counter_pts], True, (0, 255, 255), 2)  # Yellow
         cv2.putText(frame, "Cash Counter", (int(counter_pts[0][0]), int(counter_pts[0][1] - 10)),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
@@ -496,7 +544,7 @@ class TheftDetector:
             customer_pts = np.array([
                 [int(x * w), int(y * h)] for x, y in self.customer_zone
             ], np.int32)
-            cv2.polylines(frame, [customer_pts], True, (0, 255, 0), 2)
+            cv2.polylines(frame, [customer_pts], True, (0, 255, 0), 2)  # Green
             cv2.putText(frame, "Customer Zone", (int(customer_pts[0][0]), int(customer_pts[0][1] - 10)),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
@@ -505,8 +553,48 @@ class TheftDetector:
             cashier_pts = np.array([
                 [int(x * w), int(y * h)] for x, y in self.cashier_zone
             ], np.int32)
-            cv2.polylines(frame, [cashier_pts], True, (255, 0, 0), 2)
+            cv2.polylines(frame, [cashier_pts], True, (255, 0, 0), 2)  # Blue
             cv2.putText(frame, "Cashier Zone", (int(cashier_pts[0][0]), int(cashier_pts[0][1] - 10)),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
         
-        return frame 
+        # Draw entry zone
+        if self.entry_zone is not None:
+            entry_pts = np.array([
+                [int(x * w), int(y * h)] for x, y in self.entry_zone
+            ], np.int32)
+            cv2.polylines(frame, [entry_pts], True, (0, 255, 0), 2)  # Green
+            cv2.putText(frame, "Entry Zone", (int(entry_pts[0][0]), int(entry_pts[0][1] - 10)),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        # Draw exit zone
+        if self.exit_zone is not None:
+            exit_pts = np.array([
+                [int(x * w), int(y * h)] for x, y in self.exit_zone
+            ], np.int32)
+            cv2.polylines(frame, [exit_pts], True, (0, 0, 255), 2)  # Red
+            cv2.putText(frame, "Exit Zone", (int(exit_pts[0][0]), int(exit_pts[0][1] - 10)),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        
+        return frame
+    
+    def handle_person_exit(self, person_id: int, timestamp: float):
+        """
+        Call this when a person is detected exiting the store. If the person is under suspicion, flag as confirmed theft.
+        """
+        if person_id in self.suspicious_persons:
+            theft_event = {
+                "person_id": person_id,
+                "reason": self.suspicious_persons[person_id]["reason"],
+                "object": self.suspicious_persons[person_id]["object"],
+                "timestamp": timestamp,
+                "frame_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+            }
+            self.confirmed_thefts.append(theft_event)
+            logger.warning(f"CONFIRMED THEFT: Person {person_id} exited with suspicious activity: {theft_event}")
+            del self.suspicious_persons[person_id]
+            return theft_event
+        return None
+    
+    def get_confirmed_thefts(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Get the most recent confirmed theft events"""
+        return sorted(self.confirmed_thefts, key=lambda x: x["timestamp"], reverse=True)[:count] 
