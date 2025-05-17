@@ -212,6 +212,73 @@ def main():
     frame_count = 0
     start_time = time.time()
     
+    # Function to check if point is in polygon - FIXED FOR CORRECT TYPE HANDLING
+    def is_in_polygon(point, polygon):
+        # Convert point to tuple of floats for OpenCV
+        point = (float(point[0]), float(point[1]))
+        
+        # Reshape polygon to the correct format and convert to int32
+        polygon = polygon.reshape((-1, 1, 2)).astype(np.int32)
+        
+        # Use the OpenCV function
+        try:
+            return cv2.pointPolygonTest(polygon, point, False) >= 0
+        except cv2.error:
+            # Fallback to a simpler method if pointPolygonTest fails
+            # Create a bounding box
+            x_coords = [p[0][0] for p in polygon]
+            y_coords = [p[0][1] for p in polygon]
+            xmin, xmax = min(x_coords), max(x_coords)
+            ymin, ymax = min(y_coords), max(y_coords)
+            
+            # Check if the point is within the bounding box
+            return xmin <= point[0] <= xmax and ymin <= point[1] <= ymax
+        
+    # Function to calculate distance from a point to a polygon
+    def distance_to_polygon(point, polygon):
+        # Convert point to tuple of floats for OpenCV
+        point = (float(point[0]), float(point[1]))
+        
+        # Convert polygon to the format OpenCV expects
+        polygon_arr = np.array(polygon, dtype=np.int32)
+        
+        # Debug
+        print(f"Point: {point}, Polygon shape: {polygon_arr.shape}")
+        
+        # Check if person is inside polygon first
+        is_inside = is_in_polygon(point, polygon_arr)
+        if is_inside:
+            return 0  # No distance if inside
+        
+        # Calculate minimum distance to any edge of the polygon
+        min_dist = float('inf')
+        
+        # Iterate through each edge of the polygon
+        for i in range(len(polygon)):
+            p1 = polygon[i]
+            p2 = polygon[(i+1) % len(polygon)]
+            
+            # Calculate distance to the line segment
+            line_len_sq = (p2[0] - p1[0])**2 + (p2[1] - p1[1])**2
+            if line_len_sq == 0:  # Handle zero-length edge
+                dist = np.sqrt((point[0] - p1[0])**2 + (point[1] - p1[1])**2)
+            else:
+                # Calculate projection onto line segment
+                t = max(0, min(1, ((point[0] - p1[0]) * (p2[0] - p1[0]) + 
+                                   (point[1] - p1[1]) * (p2[1] - p1[1])) / line_len_sq))
+                proj_x = p1[0] + t * (p2[0] - p1[0])
+                proj_y = p1[1] + t * (p2[1] - p1[1])
+                dist = np.sqrt((point[0] - proj_x)**2 + (point[1] - proj_y)**2)
+            
+            min_dist = min(min_dist, dist)
+            
+        return min_dist
+    
+    # Define proximity threshold (in pixels) - approximates a 1-meter range
+    # This can be adjusted based on the video's scale and perspective
+    proximity_threshold = int(0.2 * max(width, height))  # 2% of max dimension for a stricter threshold
+    print(f"Proximity threshold set to {proximity_threshold} pixels")
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -241,28 +308,6 @@ def main():
         cv2.putText(frame, "Cash Counter", (cash_counter_zone[0][0] + 10, cash_counter_zone[0][1] + 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
         
-        # Function to check if point is in polygon - FIXED FOR CORRECT TYPE HANDLING
-        def is_in_polygon(point, polygon):
-            # Convert point to tuple of floats for OpenCV
-            point = (float(point[0]), float(point[1]))
-            
-            # Reshape polygon to the correct format and convert to int32
-            polygon = polygon.reshape((-1, 1, 2)).astype(np.int32)
-            
-            # Use the OpenCV function
-            try:
-                return cv2.pointPolygonTest(polygon, point, False) >= 0
-            except cv2.error:
-                # Fallback to a simpler method if pointPolygonTest fails
-                # Create a bounding box
-                x_coords = [p[0][0] for p in polygon]
-                y_coords = [p[0][1] for p in polygon]
-                xmin, xmax = min(x_coords), max(x_coords)
-                ymin, ymax = min(y_coords), max(y_coords)
-                
-                # Check if the point is within the bounding box
-                return xmin <= point[0] <= xmax and ymin <= point[1] <= ymax
-        
         # Process each detected person
         for obj in detections["objects"]:
             if obj["class_id"] == 0:  # Person class
@@ -279,9 +324,17 @@ def main():
                 in_cash_counter = is_in_polygon(position, cash_counter_zone)
                 in_shopping = is_in_polygon(position, shopping_zone)
                 
+                # Calculate distance to cash counter if not already in it
+                near_cash_counter = False
+                if not in_cash_counter:
+                    distance = distance_to_polygon(position, cash_counter_zone)
+                    print(f"Distance to cash counter: {distance}")
+                    near_cash_counter = distance <= proximity_threshold
+                    # Debug info
+                
                 # Initialize or update tracking data
                 if tracking_id not in tracked_people:
-                    # New person
+                    # New person - start everyone as window shopper by default
                     tracked_people[tracking_id] = {
                         "first_seen": frame_count,
                         "last_seen": frame_count,
@@ -291,8 +344,9 @@ def main():
                         "frames_in_shopping": 1 if in_shopping else 0,
                         "frames_in_cash_counter": 1 if in_cash_counter else 0,
                         "total_frames": 1,
-                        "visited_cash_counter": in_cash_counter,  # Flag if they ever visited cash counter
-                        "type": "unknown",  # Will be classified later
+                        "last_cash_counter_visit": 0,  # Start with 0 to indicate never visited
+                        "ever_near_cash_counter": False,  # New flag to track if ever near cash counter
+                        "type": "window_shopper",  # Start as window shopper by default
                         "counted": first_frame  # Don't count people in first frame as new entries
                     }
                 else:
@@ -307,7 +361,9 @@ def main():
                         person["frames_in_shopping"] += 1
                     if in_cash_counter:
                         person["frames_in_cash_counter"] += 1
-                        person["visited_cash_counter"] = True  # Mark if they visit counter at any point
+                        person["last_cash_counter_visit"] = frame_count  # Update timing of last visit
+                    elif near_cash_counter:
+                        person["ever_near_cash_counter"] = True
                     
                     # Update zone status
                     person["in_shopping"] = in_shopping
@@ -324,19 +380,33 @@ def main():
                 shopping_ratio = person["frames_in_shopping"] / max(1, person["total_frames"])
                 cash_counter_ratio = person["frames_in_cash_counter"] / max(1, person["total_frames"])
                 
-                # People at the cash counter for significant time are staff
+                # Define "recency window" - how many frames back is considered "recent"
+                recency_window = 30  # Consider cash counter visits in last 30 frames as "recent"
+                
+                # Only count as recently visited if they've actually been to the cash counter
+                recently_visited_cash = False
+                if "last_cash_counter_visit" in person and person["last_cash_counter_visit"] > 0:
+                    recently_visited_cash = (frame_count - person["last_cash_counter_visit"]) < recency_window
+                
+                # Add debug output for the first few people
+                if frame_count % 30 == 0 and tracking_id < 5:
+                    print(f"Person {tracking_id}: in_cash={in_cash_counter}, near={near_cash_counter}, recent={recently_visited_cash}, ever_near={person['ever_near_cash_counter']}")
+                
+                # SIMPLIFIED CLASSIFICATION LOGIC:
+                # 1. People who spend a lot of time at cash counter are staff
                 if cash_counter_ratio > 0.3 and person["frames_in_cash_counter"] > 15:
-                    person["type"] = "staff"
+                    person["type"] = "staff" 
                     staff_count_current += 1
                     color = (255, 0, 255)  # Purple
                     label = f"STAFF {tracking_id}"
-                # Anyone who has visited the cash counter is marked as potential customer
-                elif person["visited_cash_counter"] or in_cash_counter:
+                # 2. People only at or VERY near the cash counter are potential customers
+                # Removed "recently_visited_cash" to make classification more strict
+                elif in_cash_counter or near_cash_counter:
                     person["type"] = "potential"
                     potential_count += 1
                     color = (0, 255, 255)  # Cyan
                     label = f"POTENTIAL {tracking_id}"
-                # Otherwise classify as window shopper
+                # 3. Everyone else is a window shopper
                 else:
                     person["type"] = "window_shopper"
                     window_shopper_count += 1
@@ -441,6 +511,28 @@ def main():
         
         # Draw stats in bottom right with smaller font
         frame = draw_stats(frame, potential_customers, window_shoppers, staff_count, total_entries, total_exits)
+        
+        # Draw proximity threshold for visualization
+        if args.show:  # Only draw when display is enabled to avoid unnecessary computation
+            # Draw the proximity outline around cash counter
+            # Create a slightly expanded polygon
+            expanded_cash_counter = []
+            for point in cash_counter_zone:
+                expanded_cash_counter.append(point)
+            
+            # Convert to proper format
+            expanded_cash_counter = np.array(expanded_cash_counter, np.int32).reshape((-1, 1, 2))
+            # Draw dashed line for the proximity threshold
+            dash_length = 10
+            for i in range(len(cash_counter_zone)):
+                p1 = cash_counter_zone[i]
+                p2 = cash_counter_zone[(i+1) % len(cash_counter_zone)]
+                # Draw dashed line
+                cv2.line(frame, tuple(p1), tuple(p2), (0, 255, 255), 1)
+            
+            # Display the proximity threshold text
+            cv2.putText(frame, f"Proximity threshold: ~1m", (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
         # Add processing information (smaller and also in bottom left)
         elapsed = current_time - start_time
